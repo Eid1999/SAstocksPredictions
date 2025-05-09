@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Seleção de Ações e Intervalo de Datas</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 0; }
+    .container { display: flex; align-items: flex-start; gap: 20px; padding: 20px; }
+    form { flex: 0 0 350px; background: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    label { display: block; margin-top: 15px; font-weight: 600; color: #333; }
+    select { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; font-size: 1em; }
+    .dropdown { position: relative; margin-top: 5px; }
+    .dropdown-selected { display: flex; align-items: center; padding: 10px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; background: #fff; }
+    .dropdown-selected img { width: 24px; height: 24px; margin-right: 10px; }
+    .dropdown-list { position: absolute; top: calc(100% + 5px); left: 0; right: 0; background: #fff; border: 1px solid #ccc; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); overflow: hidden; z-index: 10; }
+    .dropdown-item { display: flex; align-items: center; padding: 10px; transition: background-color 0.2s; }
+    .dropdown-item img { width: 24px; height: 24px; margin-right: 10px; }
+    .dropdown-item:hover { background-color: #f5f5f5; }
+    .hidden { display: none; }
+    .chart-container { flex: 1; background: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
+    .chart-header { font-size: 1.25em; font-weight: 600; color: #333; margin-bottom: 15px; border-bottom: 1px solid #e0e0e0; padding-bottom: 10px; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; row-gap: 8px; column-gap: 20px; margin-bottom: 20px; }
+    .info-grid div { font-size: 1em; color: #555; }
+    .info-grid .label { font-weight: 600; color: #333; }
+    .chart-container img { width: 100%; height: auto; border-radius: 4px; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <form id="dateForm">
+      <label>Selecione o Stock:</label>
+      <div id="stockDropdown" class="dropdown">
+        <div class="dropdown-selected"><img src="https://logo.clearbit.com/apple.com?size=40" alt="Apple"><span>Apple</span></div>
+        <div class="dropdown-list hidden">
+          <div class="dropdown-item" data-value="apple" data-logo="https://logo.clearbit.com/apple.com?size=40"><img src="https://logo.clearbit.com/apple.com?size=40" alt="Apple"><span>Apple</span></div>
+          <div class="dropdown-item" data-value="microsoft" data-logo="https://logo.clearbit.com/microsoft.com?size=40"><img src="https://logo.clearbit.com/microsoft.com?size=40" alt="Microsoft"><span>Microsoft</span></div>
+          <div class="dropdown-item" data-value="tesla" data-logo="https://logo.clearbit.com/tesla.com?size=40"><img src="https://logo.clearbit.com/tesla.com?size=40" alt="Tesla"><span>Tesla</span></div>
+        </div>
+      </div>
+      <input type="hidden" id="stock" name="stock" value="apple">
+      <label for="startMonth">Mês Inicial:</label>
+      <select id="startMonth" name="startMonth">
+        <option value="1">Janeiro</option>
+        <option value="2">Fevereiro</option>
+        <option value="3">Março</option>
+        <option value="4">Abril</option>
+        <option value="5">Maio</option>
+        <option value="6">Junho</option>
+        <option value="7">Julho</option>
+        <option value="8">Agosto</option>
+        <option value="9">Setembro</option>
+        <option value="10">Outubro</option>
+        <option value="11">Novembro</option>
+        <option value="12">Dezembro</option>
+      </select>
+      <label for="startYear">Ano Inicial:</label>
+      <select id="startYear" name="startYear">
+        <option>2010</option><option>2011</option><option>2012</option><option>2013</option><option>2014</option>
+        <option>2015</option><option>2016</option><option>2017</option><option>2018</option><option>2019</option><option>2020</option>
+      </select>
+      <label for="endMonth">Mês Final:</label>
+      <select id="endMonth" name="endMonth">
+        <option value="1">Janeiro</option>
+        <option value="2">Fevereiro</option>
+        <option value="3">Março</option>
+        <option value="4">Abril</option>
+        <option value="5">Maio</option>
+        <option value="6">Junho</option>
+        <option value="7">Julho</option>
+        <option value="8">Agosto</option>
+        <option value="9">Setembro</option>
+        <option value="10">Outubro</option>
+        <option value="11">Novembro</option>
+        <option value="12">Dezembro</option>
+      </select>
+      <label for="endYear">Ano Final:</label>
+      <select id="endYear" name="endYear">
+        <option>2010</option><option>2011</option><option>2012</option><option>2013</option><option>2014</option>
+        <option>2015</option><option>2016</option><option>2017</option><option>2018</option><option>2019</option><option>2020</option>
+      </select>
+    </form>
+    <div class="chart-container">
+      <div class="chart-header">Resumo</div>
+      <div class="info-grid">
+        <div class="label">Empresa:</div><div id="companyName">Apple</div>
+        <div class="label">Mês Inicial:</div><div id="startMonthLabel">Janeiro</div>
+        <div class="label">Ano Inicial:</div><div id="startYearLabel">2010</div>
+        <div class="label">Mês Final:</div><div id="endMonthLabel">Janeiro</div>
+        <div class="label">Ano Final:</div><div id="endYearLabel">2010</div>
+      </div>
+      <img id="chart" src="/chart?stock=apple&startYear=2010&startMonth=1&endYear=2010&endMonth=1" alt="Gráfico de Stock">
+    </div>
+  </div>
+  <script>
+    const dropdown    = document.getElementById('stockDropdown');
+    const selected    = dropdown.querySelector('.dropdown-selected');
+    const list        = dropdown.querySelector('.dropdown-list');
+    const hiddenInput = document.getElementById('stock');
+    const items       = dropdown.querySelectorAll('.dropdown-item');
+    const chartImg    = document.getElementById('chart');
+    const companyName = document.getElementById('companyName');
+    const startMonth  = document.getElementById('startMonth');
+    const startYear   = document.getElementById('startYear');
+    const endMonth    = document.getElementById('endMonth');
+    const endYear     = document.getElementById('endYear');
+    const startMonthLbl = document.getElementById('startMonthLabel');
+    const startYearLbl  = document.getElementById('startYearLabel');
+    const endMonthLbl   = document.getElementById('endMonthLabel');
+    const endYearLbl    = document.getElementById('endYearLabel');
+
+    function updateLabels() {
+      companyName.textContent   = selected.querySelector('span').textContent;
+      startMonthLbl.textContent = startMonth.selectedOptions[0].text;
+      startYearLbl.textContent  = startYear.value;
+      endMonthLbl.textContent   = endMonth.selectedOptions[0].text;
+      endYearLbl.textContent    = endYear.value;
+    }
+    function updateChart() {
+      const stock = hiddenInput.value;
+      const sm    = startMonth.value;
+      const sy    = startYear.value;
+      const em    = endMonth.value;
+      const ey    = endYear.value;
+      chartImg.src = `/chart?stock=${stock}&startYear=${sy}&startMonth=${sm}&endYear=${ey}&endMonth=${em}&t=${Date.now()}`;
+    }
+    function updateEndMonthOptions() {
+      const sy = +startYear.value, ey = +endYear.value, sm = +startMonth.value;
+      Array.from(endMonth.options).forEach(opt => opt.disabled = false);
+      if (sy === ey) {
+        Array.from(endMonth.options).forEach(opt => { if (+opt.value < sm) opt.disabled = true; });
+        if (+endMonth.value < sm) endMonth.value = sm;
+      }
+    }
+    function updateEndYearOptions() {
+      const sy = +startYear.value;
+      Array.from(endYear.options).forEach(opt => opt.disabled = false);
+      Array.from(endYear.options).forEach(opt => { if (+opt.value < sy) opt.disabled = true; });
+      if (+endYear.value < sy) endYear.value = sy;
+    }
+    function updateChart() {
+      chartImg.src = "";
+      chartImg.alt = "Carregando gráfico...";
+      const stock = hiddenInput.value;
+      const sm    = startMonth.value;
+      const sy    = startYear.value;
+      const em    = endMonth.value;
+      const ey    = endYear.value;
+      chartImg.src = `/chart?stock=${stock}&startYear=${sy}&startMonth=${sm}&endYear=${ey}&endMonth=${em}&t=${Date.now()}`;
+    }
+    function updateAll() { updateLabels(); updateChart(); updateEndYearOptions(); updateEndMonthOptions(); }
+
+    selected.addEventListener('click', () => list.classList.toggle('hidden'));
+    items.forEach(item => item.addEventListener('click', () => {
+      hiddenInput.value = item.dataset.value;
+      selected.querySelector('img').src = item.dataset.logo;
+      selected.querySelector('span').textContent = item.textContent.trim();
+      list.classList.add('hidden');
+      updateAll();
+    }));
+    document.addEventListener('click', e => { if (!dropdown.contains(e.target)) list.classList.add('hidden'); });
+
+    [startMonth, startYear, endMonth, endYear].forEach(el => el.addEventListener('change', updateAll));
+    updateAll();
+
+  </script>
+</body>
+</html>
