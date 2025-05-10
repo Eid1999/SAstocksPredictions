@@ -1,72 +1,102 @@
-# finbert_sentiment_analyzer.py
-
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from tqdm import tqdm
 from Dataset import Dataset_Class
+import pandas as pd
+import pdb
 
-class FinBertSentimentAnalyzer:
-    def __init__(self, dataset: Dataset_Class, model_name="ProsusAI/finbert"):
-        """
-        Initializes the FinBERT sentiment analyzer, loading the model and tokenizer.
-        """
+class FinBertTargetSentimentAnalyzer:
+
+    def __init__(
+        self,
+        dataset: Dataset_Class,
+        model_name: str = "yiyanghkust/finbert-tone",
+        text_column: str = "company_focused_summary",
+    ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(self.device)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name).to(
+            self.device
+        )
         self.model.eval()
-
         self.label_map = {0: "negative", 1: "neutral", 2: "positive"}
         self.df = dataset.news_data
+        self.text_column = text_column
+        self.keywords = dataset.keywords
+        self.stock_symbol = dataset.stock_symbol
 
-
-    def analyze_sentiment(self, text_column="News", batch_size=200):
-        """
-        Performs sentiment analysis on a DataFrame.
-
-        Args:
-            df (pd.DataFrame): Input DataFrame containing a text column.
-            text_column (str): Column with text data.
-            batch_size (int): Batch size for GPU processing.
-
-        Returns:
-            pd.DataFrame: DataFrame with sentiment labels and scores.
-        """
+    def analyze_target_sentiment(self, batch_size=64):
         df = self.df.copy()
-        texts = df[text_column].astype(str).tolist()
-        sentiments = []
-        scores = []
+        texts = df[self.text_column].fillna("No information").astype(str).tolist()
+        dates = df["date"].tolist()  # Include the date column
+        all_results = []
 
-        for i in tqdm(range(0, len(texts), batch_size), desc="Sentiment Analysis"):
-            batch_texts = texts[i:i + batch_size]
-            inputs = self.tokenizer(batch_texts, padding=True, truncation=True, return_tensors="pt").to(self.device)
+        for i in tqdm(
+            range(0, len(texts), batch_size), desc="Targeted Sentiment Analysis"
+        ):
+            batch_texts = texts[i : i + batch_size]
+            batch_dates = dates[i : i + batch_size]  # Corresponding dates for the batch
 
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                probs = F.softmax(outputs.logits, dim=1)
-                labels = torch.argmax(probs, dim=1)
+            for text, date in zip(batch_texts, batch_dates):
+                result = {"date": date, self.text_column: text}  # Include the date
 
-            for j in range(len(batch_texts)):
-                sentiment = self.label_map[labels[j].item()]
-                score = probs[j][labels[j]].item()
-                sentiments.append(sentiment)
-                scores.append(score)
+                if text.strip().lower() == "no information":
+                    result.update(
+                        {"keyword": None, "sentiment": "neutral", "score": 0.0}
+                    )
+                    all_results.append(result)
+                    continue
 
-        df["sentiment"] = sentiments
-        df["sentiment_score"] = scores
-        return df
+                aspect_sentiments = []
 
-    def save_sentiment_files(self, df, output_prefix="output"):
-        """
-        Saves the positive, neutral, and negative sentiment entries to separate CSV files.
+                for keyword in self.keywords:
+                    if keyword.lower() in text.lower():
+                        input_text = f"{keyword} [SEP] {text}"
+                        inputs = self.tokenizer(
+                            input_text,
+                            padding=True,
+                            truncation=True,
+                            max_length=512,
+                            return_tensors="pt",
+                        ).to(self.device)
 
-        Args:
-            df (pd.DataFrame): DataFrame that includes sentiment analysis results.
-            output_prefix (str): Prefix for the output file names.
-        """
-        for label in ["positive", "neutral", "negative"]:
-            filtered_df = df[df["sentiment"] == label][["News", "sentiment", "sentiment_score"]].head(50)
-            file_name = f"{output_prefix}_{label}_news.csv"
-            filtered_df.to_csv(file_name, index=False)
-            print(f"• {file_name} saved.")
+                        with torch.no_grad():
+                            outputs = self.model(**inputs)
+                            probs = F.softmax(outputs.logits, dim=1)
+                            label = torch.argmax(probs, dim=1).item()
+                            sentiment = self.label_map[label]
+                            score = probs[0][label].item()
 
+                        aspect_sentiments.append((keyword, sentiment, score))
+
+                if aspect_sentiments:
+                    # Select keyword with highest score
+                    best = max(aspect_sentiments, key=lambda x: x[2])
+                    result.update(
+                        {"keyword": best[0], "sentiment": best[1], "score": best[2]}
+                    )
+                else:
+                    result.update(
+                        {"keyword": None, "sentiment": "neutral", "score": 0.0}
+                    )
+
+                all_results.append(result)
+
+        return pd.DataFrame(all_results)
+
+    def save_sentiment_file(
+        self, df
+    ):
+        output_file = f"sentiment_analysis_{self.stock_symbol}.csv"
+        df.to_csv(output_file, index=False)
+        print(f"• {output_file} saved.")
+
+
+if __name__ == "__main__":
+    dt = Dataset_Class("MSFT", load_dataset=False)
+    analyzer = FinBertTargetSentimentAnalyzer(dt)
+    result_df = analyzer.analyze_target_sentiment()
+    analyzer.save_sentiment_file(result_df)
+    result_df = dt.add_setiment(result_df)
+    dt.save_csv()

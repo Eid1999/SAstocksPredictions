@@ -68,7 +68,9 @@ class Dataset_Class:
             end=self.end_date,
             auto_adjust=True,
         )
-
+        if self.stock_data is None:
+            print(f"No data found for {self.stock_symbol} in the specified date range.")
+            return
         # Flatten multi-index columns if present
         if isinstance(self.stock_data.columns, pd.MultiIndex):
             self.stock_data.columns = self.stock_data.columns.get_level_values(0)
@@ -76,6 +78,7 @@ class Dataset_Class:
         self.stock_data.reset_index(inplace=True)
         self.stock_data = self.stock_data[["Date", "Close"]]
         self.stock_data.rename(columns={"Date": "date"}, inplace=True)
+        self.stock_data["date"] = pd.to_datetime(self.stock_data["date"], utc=True)
 
     def merge_stock_and_news_data(self, save: bool = True) -> None:
         """
@@ -92,11 +95,16 @@ class Dataset_Class:
                 how="left"
             )
             self.data.fillna("No Information", inplace=True)
+            self.news_data = self.data[["date", "company_focused_summary"]]
+            self.stock_data = self.data[["date", "Close"]]
 
             if save:
-                self.data.to_csv(f"{self.stock_symbol.lower()}_data.csv", index=False)
+                self.save_csv()
         except Exception as e:
             print(f"Error merging stock and news data: {str(e)}")
+
+    def save_csv(self) -> None:
+        self.data.to_csv(f"{self.stock_symbol.lower()}_data.csv", index=False)
 
     def get_news(self) -> None:
         """
@@ -140,8 +148,14 @@ class Dataset_Class:
         Clean and preprocess the news data.
         """
         try:
-            self.news_data["date"] = pd.to_datetime(self.news_data["date"], errors="coerce").dt.normalize()
-            self.news_data.dropna(subset=["date"], inplace=True)
+            # Convert the 'date' column to datetime, coercing invalid values to NaT
+            self.news_data["date"] = pd.to_datetime(self.news_data["date"], errors="coerce", utc=True)
+
+            # Drop rows with invalid or missing dates
+            self.news_data = self.news_data[self.news_data["date"].notna()]
+
+            # Normalize the dates to remove time components
+            self.news_data["date"] = self.news_data["date"].dt.normalize()
 
             # Filter by date range
             mask = (self.news_data["date"] >= self.start_date) & (self.news_data["date"] <= self.end_date)
@@ -187,7 +201,6 @@ class Dataset_Class:
         for index, row in self.news_data.iterrows():
             content = str(row.get("title", "")).strip()
             if not content:
-                print(f"Empty or invalid content at row {index}")
                 self.news_data.at[index, "company_focused_summary"] = "No Information"
                 continue
 
@@ -208,6 +221,15 @@ class Dataset_Class:
             else:
 
                 self.news_data.at[index, "company_focused_summary"] = "No Information"
+        self.news_data["company_focused_summary"] = self.news_data[
+            "company_focused_summary"
+        ].apply(
+            lambda x: (
+                ". ".join(sorted(set(x.split(". ")), key=x.split(". ").index))
+                if isinstance(x, str)
+                else x
+            )
+        )
         if save:
 
             self.news_data[["date","company_focused_summary"]].to_csv(
@@ -217,100 +239,8 @@ class Dataset_Class:
                 f"summary_{self.stock_symbol.lower()}_data.csv", index=False
             )
 
-    def generate_company_focused_summary_ner(self, save=False, use_gpu=True):
-        """
-        Generate summaries of news content focused on company entities using spaCy's NER.
-        Uses GPU if `use_gpu=True` and a transformer model is available.
-        """
 
-        # Load spaCy model with GPU support if requested
-        nlp = None
-        if use_gpu:
-            try:
-
-                require_gpu()  # use default GPU
-                nlp = spacy.load("en_core_web_trf")
-                print("Using GPU with en_core_web_trf")
-            except Exception as e:
-                print(f"Failed to load GPU-based model: {e}")
-                print("Falling back to CPU-based model...")
-
-        if nlp is None:
-            try:
-                nlp = spacy.load("en_core_web_md")
-                print("Using en_core_web_md (CPU)")
-            except OSError:
-                try:
-                    nlp = spacy.load("en_core_web_sm")
-                    print("Using en_core_web_sm (CPU)")
-                except OSError:
-                    print("No spaCy models found. Downloading en_core_web_sm...")
-                    try:
-                        import subprocess
-
-                        subprocess.check_call(
-                            [sys.executable, "-m", "spacy", "download", "en_core_web_sm"]
-                        )
-                        nlp = spacy.load("en_core_web_sm")
-                        print("Downloaded and loaded en_core_web_sm model")
-                    except Exception as e:
-                        print(f"Error installing spaCy model: {e}")
-                        nlp = spacy.blank("en")  # very basic fallback
-
-        self.news_data["company_focused_summary"] = None  # Initialize the column
-        print("Starting NER-based filtering...")
-
-        # Normalize company-related terms
-        company_terms = set()
-        for category in ["company", "products", "people"]:
-            if hasattr(self, category):
-                company_terms.update([term.lower() for term in getattr(self, category)])
-
-        for index, row in tqdm(
-            self.news_data.iterrows(), total=len(self.news_data), desc="Processing news"
-        ):
-            content = str(row.get("title", "")).strip()
-            if not content:
-                print(f"Empty or invalid content at row {index}")
-                self.news_data.at[index, "company_focused_summary"] = "No Information"
-                continue
-
-            sentences = re.split(r"(?<!\d)\.(?!\d)|[\-\|\;]", content)
-            matched_sentences = []
-
-            for sentence in sentences:
-                sentence = sentence.strip()
-                if not sentence:
-                    continue
-
-                doc = nlp(sentence)
-                entities_found = [
-                    ent.text.lower()
-                    for ent in doc.ents
-                    if ent.label_ in ["ORG", "PRODUCT", "PERSON", "GPE"]
-                ]
-
-                if any(entity in company_terms for entity in entities_found):
-                    matched_sentences.append(sentence)
-
-            if matched_sentences:
-                self.news_data.at[index, "company_focused_summary"] = ". ".join(
-                    matched_sentences
-                )
-            else:
-                print(
-                    f"No match at row {index}:\n  Content: {content}\n  Entities: {entities_found}\n  Terms: {company_terms}"
-                )
-                self.news_data.at[index, "company_focused_summary"] = "No Information"
-
-        if save:
-            self.news_data[["date", "company_focused_summary"]].to_csv(
-                f"summary_{self.stock_symbol.lower()}_news.csv", index=False
-            )
-            self.news_data.to_csv(
-                f"summary_{self.stock_symbol.lower()}_data.csv", index=False
-            )
-
+       
     def __str__(self):
         return str(self.data)
 
@@ -371,9 +301,151 @@ class Dataset_Class:
         plt.savefig(f"./graphs/{self.stock_symbol.lower()}_news_pie_chart_seaborn.png")
         plt.show()
 
+    def add_setiment(
+        self, sentiment: Optional[pd.DataFrame] = None
+    ) -> None:
+        """
+        Add sentiment analysis results to the dataset.
+
+        Args:
+            sentiment (pd.DataFrame): DataFrame containing sentiment analysis results.
+        """
+        if sentiment is not None:
+            # Exclude 'company_focused_summary' from the sentiment DataFrame
+            sentiment = sentiment.drop(columns=["company_focused_summary"], errors="ignore")
+
+            # Merge on the 'date' column
+            self.data = pd.merge(
+                self.data,
+                sentiment,
+                on="date",
+                how="left"
+            )
+
+        else:
+            print("No sentiment data provided.")
+            return None
+    def plot_sentiment_distribution(self, chart_type: str = "bar") -> None:
+        """
+        Plot the distribution of sentiments as a bar chart or pie chart, excluding "No Information".
+
+        Args:
+            chart_type (str): Type of chart to plot ("bar" or "pie").
+        """
+        if "sentiment" not in self.data.columns:
+            print("The 'sentiment' column is missing in the dataset.")
+            return
+
+        # Exclude rows with "No Information"
+        filtered_data = self.data[self.data["company_focused_summary"] != "No Information"]
+        sentiment_counts = filtered_data["sentiment"].value_counts()
+
+        if chart_type == "bar":
+            plt.figure(figsize=(10, 6))
+            sns.barplot(
+                x=sentiment_counts.index,
+                y=sentiment_counts.values,
+                palette={"positive": "green", "neutral": "blue", "negative": "red"},
+            )
+            plt.title(f"Sentiment Distribution for {self.stock_symbol}", fontsize=16)
+            plt.xlabel("Sentiment", fontsize=12)
+            plt.ylabel("Count", fontsize=12)
+            plt.grid(axis="y", linestyle="--", alpha=0.7)
+            plt.tight_layout()
+            plt.savefig(f"./graphs/{self.stock_symbol.lower()}_sentiment_distribution_bar.png")
+            plt.show()
+
+        elif chart_type == "pie":
+            plt.figure(figsize=(8, 8))
+            plt.pie(
+                sentiment_counts.values,
+                labels=sentiment_counts.index,
+                autopct="%1.1f%%",
+                startangle=90,
+                colors=["green", "blue", "red"],
+                wedgeprops={"edgecolor": "black"},
+                textprops={"fontsize": 12},
+            )
+            plt.title(f"Sentiment Distribution for {self.stock_symbol}", fontsize=16)
+            plt.savefig(f"./graphs/{self.stock_symbol.lower()}_sentiment_distribution_pie.png")
+            plt.show()
+
+        else:
+            print("Invalid chart type. Please choose 'bar' or 'pie'.")
+
+    def plot_sentiment_vs_stock_price(self) -> None:
+        """
+        Plot the correlation between sentiment categories (positive, neutral, negative) and stock prices.
+
+        This scatter plot shows how sentiment categories relate to stock prices.
+        """
+        if "sentiment" not in self.data.columns or "Close" not in self.data.columns:
+            print("Required columns ('sentiment' and 'Close') are missing in the dataset.")
+            return
+
+        # Exclude rows with "No Information"
+        filtered_data = self.data[self.data["company_focused_summary"] != "No Information"]
+
+        sns.set_theme(style="whitegrid")
+        plt.figure(figsize=(12, 6))
+        sns.stripplot(
+            x=filtered_data["sentiment"],
+            y=filtered_data["Close"],
+            palette={"positive": "green", "neutral": "blue", "negative": "red"},
+            jitter=True,
+            alpha=0.7,
+        )
+        plt.title(f"Sentiment Categories vs Stock Price for {self.stock_symbol}", fontsize=16)
+        plt.xlabel("Sentiment", fontsize=12)
+        plt.ylabel("Stock Price (Close)", fontsize=12)
+        plt.grid(axis="y", linestyle="--", alpha=0.7)
+        plt.tight_layout()
+        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_sentiment_vs_stock_price_categories.png")
+        plt.show()
+
+    def plot_sentiment_vs_stock_movement(self) -> None:
+        """
+        Plot the correlation between sentiment categories (positive, neutral, negative)
+        and stock price movement (rise or fall).
+        """
+        if "sentiment" not in self.data.columns or "Close" not in self.data.columns:
+            print("Required columns ('sentiment' and 'Close') are missing in the dataset.")
+            return
+
+        # Exclude rows with "No Information"
+        filtered_data = self.data[self.data["company_focused_summary"] != "No Information"]
+
+        # Add a column for stock movement (rise or fall)
+        filtered_data["movement"] = filtered_data["Close"].diff().apply(
+            lambda x: "rise" if x > 0 else "fall"
+        )
+
+        # Group data by sentiment and movement
+        movement_counts = filtered_data.groupby(["sentiment", "movement"]).size().unstack()
+
+        # Plot the data
+        movement_counts.plot(
+            kind="bar",
+            stacked=True,
+            color={"rise": "green", "fall": "red"},
+            figsize=(10, 6),
+        )
+        plt.title(f"Sentiment vs Stock Movement for {self.stock_symbol}", fontsize=16)
+        plt.xlabel("Sentiment", fontsize=12)
+        plt.ylabel("Count", fontsize=12)
+        plt.legend(title="Stock Movement", loc="upper right")
+        plt.grid(axis="y", linestyle="--", alpha=0.7)
+        plt.tight_layout()
+        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_sentiment_vs_stock_movement.png")
+        plt.show()
+
 
 # Test the implementation
 if __name__ == "__main__":
-    dt = Dataset_Class("TSLA", load_dataset=True)
-    dt.sccater_plot("2018-01-01", "2018-02-01")
-    dt.pie_graph()
+    dt = Dataset_Class("AAPL", load_dataset=True)
+    if True:
+        dt.sccater_plot("2018-01-01", "2018-02-01")
+        dt.pie_graph()
+        dt.plot_sentiment_distribution("pie")
+        dt.plot_sentiment_vs_stock_price()
+        dt.plot_sentiment_vs_stock_movement()
