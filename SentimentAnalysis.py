@@ -5,13 +5,14 @@ from tqdm import tqdm
 from Dataset import Dataset_Class
 import pandas as pd
 import pdb
-
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 class FinBertTargetSentimentAnalyzer:
 
     def __init__(
         self,
         dataset: Dataset_Class,
-        model_name: str = "yiyanghkust/finbert-tone",
+        model_name: str = "cardiffnlp/twitter-roberta-base-sentiment-latest",
         text_column: str = "company_focused_summary",
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,7 +27,11 @@ class FinBertTargetSentimentAnalyzer:
         self.keywords = dataset.keywords
         self.stock_symbol = dataset.stock_symbol
 
-    def analyze_target_sentiment(self, batch_size=64):
+    def analyze_target_sentiment(self, batch_size=16):
+        """
+        Analyze sentiment for specific aspects (keywords) in the text using the model.
+        Save only the scores for each category. If no information is available, set neutral=1.0 and others=0.0.
+        """
         df = self.df.copy()
         texts = df[self.text_column].fillna("No information").astype(str).tolist()
         dates = df["date"].tolist()  # Include the date column
@@ -42,13 +47,21 @@ class FinBertTargetSentimentAnalyzer:
                 result = {"date": date, self.text_column: text}  # Include the date
 
                 if text.strip().lower() == "no information":
+                    # Default scores when no information is available
                     result.update(
-                        {"keyword": None, "sentiment": "neutral", "score": 0.0}
+                        {
+                            "negative_score": 0.0,
+                            "neutral_score": 1.0,
+                            "positive_score": 0.0,
+                        }
                     )
                     all_results.append(result)
                     continue
 
-                aspect_sentiments = []
+                # Initialize scores
+                negative_score = 0.0
+                neutral_score = 0.0
+                positive_score = 0.0
 
                 for keyword in self.keywords:
                     if keyword.lower() in text.lower():
@@ -64,22 +77,28 @@ class FinBertTargetSentimentAnalyzer:
                         with torch.no_grad():
                             outputs = self.model(**inputs)
                             probs = F.softmax(outputs.logits, dim=1)
-                            label = torch.argmax(probs, dim=1).item()
-                            sentiment = self.label_map[label]
-                            score = probs[0][label].item()
+                            scores = probs[0].tolist()  # Get all scores for the sentiment categories
 
-                        aspect_sentiments.append((keyword, sentiment, score))
+                        # Accumulate scores for each category
+                        negative_score += scores[0]
+                        neutral_score += scores[1]
+                        positive_score += scores[2]
 
-                if aspect_sentiments:
-                    # Select keyword with highest score
-                    best = max(aspect_sentiments, key=lambda x: x[2])
-                    result.update(
-                        {"keyword": best[0], "sentiment": best[1], "score": best[2]}
-                    )
-                else:
-                    result.update(
-                        {"keyword": None, "sentiment": "neutral", "score": 0.0}
-                    )
+                # Normalize scores if multiple keywords are found
+                total_keywords = len(self.keywords)
+                if total_keywords > 0:
+                    negative_score /= total_keywords
+                    neutral_score /= total_keywords
+                    positive_score /= total_keywords
+
+                # Update result with scores
+                result.update(
+                    {
+                        "negative_score": negative_score,
+                        "neutral_score": neutral_score,
+                        "positive_score": positive_score,
+                    }
+                )
 
                 all_results.append(result)
 
@@ -94,7 +113,7 @@ class FinBertTargetSentimentAnalyzer:
 
 
 if __name__ == "__main__":
-    dt = Dataset_Class("MSFT", load_dataset=False)
+    dt = Dataset_Class("AAPL", load_dataset=False)
     analyzer = FinBertTargetSentimentAnalyzer(dt)
     result_df = analyzer.analyze_target_sentiment()
     analyzer.save_sentiment_file(result_df)

@@ -17,7 +17,7 @@ class Dataset_Class:
         stock_symbol: str,
         start_date: str = "2009-04-27",
         end_date: str = "2020-06-11",
-        load_dataset: bool = False,
+        load_dataset: bool = True,
     ):
         """
         Initialize the Dataset_Class with stock symbol, date range, and dataset loading options.
@@ -182,6 +182,12 @@ class Dataset_Class:
                 "products": ["windows", "azure", "xbox"],
                 "people": ["satya nadella", "bill gates"],
             }
+        elif self.stock_symbol == "AMZN":
+            dict_keywords = {
+                "company": ["Amazon", "amzn", "amazon.com"],
+                "products": ["aws", "prime", "alexa", "echo", "kindle"],
+                "people": ["jeff bezos", "andy jassy"],
+            }
         else:
             dict_keywords = {
                 "company": ["Tesla", "tsla", "tesla inc"],
@@ -221,15 +227,15 @@ class Dataset_Class:
             else:
 
                 self.news_data.at[index, "company_focused_summary"] = "No Information"
-        self.news_data["company_focused_summary"] = self.news_data[
-            "company_focused_summary"
-        ].apply(
-            lambda x: (
-                ". ".join(sorted(set(x.split(". ")), key=x.split(". ").index))
-                if isinstance(x, str)
-                else x
-            )
-        )
+        # self.news_data["company_focused_summary"] = self.news_data[
+        #     "company_focused_summary"
+        # ].apply(
+        #     lambda x: (
+        #         ". ".join(sorted(set(x.split(". ")), key=x.split(". ").index))
+        #         if isinstance(x, str)
+        #         else x
+        #     )
+        # )
         if save:
 
             self.news_data[["date","company_focused_summary"]].to_csv(
