@@ -1,6 +1,6 @@
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 import matplotlib.pyplot as plt
 from io import BytesIO
 import numpy as np
@@ -8,6 +8,8 @@ from Dataset import Dataset_Class
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
+import pdb
+from sklearn.metrics import mean_absolute_error, r2_score
 
 
 class SelfAttention(nn.Module):
@@ -80,18 +82,10 @@ class SelfAttention(nn.Module):
         return output
 
 
-class LSTMModel(torch.nn.Module):
-    def __init__(
-        self,
-        input_size,
-        hidden_size,
-        output_size,
-        num_layers=2,
-        dropout=0.1,
-        num_heads=8,
-    ):
-        super(LSTMModel, self).__init__()
-        self.lstm = torch.nn.LSTM(
+class ResidualLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, dropout):
+        super(ResidualLSTM, self).__init__()
+        self.lstm = nn.LSTM(
             input_size,
             hidden_size,
             num_layers=num_layers,
@@ -99,45 +93,39 @@ class LSTMModel(torch.nn.Module):
             dropout=dropout,
             bidirectional=True,
         )
+        self.residual_proj = nn.Linear(input_size, hidden_size * 2)
 
-        # Add the SelfAttention layer
-        # The input dimension to self-attention is hidden_size * 2 because of bidirectional LSTM
-        self.self_attention = SelfAttention(
-            embed_dim=hidden_size * 2, num_heads=num_heads
+    def forward(self, x):
+        residual = self.residual_proj(x)
+        lstm_out, _ = self.lstm(x)
+        return lstm_out + residual
+
+
+class LSTMModel(torch.nn.Module):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        num_layers=3,
+        dropout=0.1,
+    ):
+        super(LSTMModel, self).__init__()
+        self.lstm = ResidualLSTM(
+            input_size,
+            hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
         )
-
-        # The original attention layer, now applied *after* self-attention
-        # This layer is used to produce a single context vector from the sequence representation
-        # enhanced by self-attention.
-        self.attention = torch.nn.Linear(hidden_size * 2, 1)
-
         self.fc1 = torch.nn.Linear(hidden_size * 2, hidden_size)
         self.relu = torch.nn.ReLU()
         self.dropout = torch.nn.Dropout(dropout)
         self.fc2 = torch.nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
-        # x shape: (batch_size, seq_len, input_size)
-
-        # Pass input through LSTM
-        # lstm_out shape: (batch_size, seq_len, hidden_size * 2) due to bidirectional
-        lstm_out, _ = self.lstm(x)
-
-        # Apply self-attention to the LSTM output
-        # self_attn_out shape: (batch_size, seq_len, hidden_size * 2)
-        self_attn_out = self.self_attention(lstm_out)
-
-        # Apply the original attention mechanism on the self-attention output
-        # This learns a weighted sum of the self-attention enhanced features
-        # attn_weights shape: (batch_size, seq_len, 1)
-        attn_weights = torch.softmax(self.attention(self_attn_out), dim=1)
-
-        # Compute the context vector as a weighted sum of the self-attention outputs
-        # context shape: (batch_size, hidden_size * 2)
-        context = torch.sum(attn_weights * self_attn_out, dim=1)
-
-        # Pass the context vector through the feed-forward layers
-        out = self.fc1(context)
+        lstm_out = self.lstm(x)
+        pooled_out = torch.max(lstm_out, dim=1)[0]
+        out = self.fc1(pooled_out)
         out = self.relu(out)
         out = self.dropout(out)
         output = self.fc2(out)
@@ -162,10 +150,12 @@ class StockPriceForecaster:
         company: str,
         start_date=None,
         end_date=None,
-        max_encoder_length=365,
-        max_prediction_length=60,
-        batch_size=32,
+        max_encoder_length=100,
+        max_prediction_length=1,
+        batch_size=68,
     ):
+        self.Model_Path=f"best_model_{company}.pt"
+        torch.manual_seed(42)
         self.company = company
         self.encoder_len = max_encoder_length
         self.prediction_len = max_prediction_length
@@ -222,19 +212,25 @@ class StockPriceForecaster:
         self.full_df["close"] = (
             self.full_df["close"] - self.close_mean
         ) / self.close_std
+        self.full_df["avg_sentiment_score"] = (
+            self.full_df["avg_sentiment_score"]
+            - self.full_df["avg_sentiment_score"].mean()
+        ) / self.full_df["avg_sentiment_score"].std()
+        self.full_df["sentiment_balance"] = (
+            self.full_df["sentiment_balance"] - self.full_df["sentiment_balance"].mean()
+        ) / self.full_df["sentiment_balance"].std()
 
     def build_model(self):
         input_size = 3
-        hidden_size = 32
+        hidden_size = 500
         self.model = LSTMModel(input_size, hidden_size, self.prediction_len)
         self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
-    def train_model(self, max_epochs=20):
+    def train_model(self, max_epochs=200, patience=30):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         df = self.full_df.copy()
         features = ["close", "avg_sentiment_score", "sentiment_balance"]
-
-        X, y = [], []
+        X, y, dates = [], [], []
         for i in range(len(df) - self.encoder_len - self.prediction_len):
             X.append(df[features].iloc[i : i + self.encoder_len].values)
             y.append(
@@ -242,98 +238,137 @@ class StockPriceForecaster:
                 .iloc[i + self.encoder_len : i + self.encoder_len + self.prediction_len]
                 .values
             )
-
-        X = torch.tensor(np.array(X), dtype=torch.float32).to(device)
-        y = torch.tensor(np.array(y), dtype=torch.float32).to(device)
-
+            dates.append(
+                df["date"].iloc[i + self.encoder_len + self.prediction_len - 1]
+            )
+        X = torch.tensor(np.array(X), dtype=torch.float32)
+        y = torch.tensor(np.array(y), dtype=torch.float32)
         dataset = CustomDataset(X, y)
-        dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
-
+        total_len = len(dataset)
+        val_len = int(0.2 * total_len)
+        test_len = int(0.1 * total_len)
+        train_len = total_len - val_len - test_len
+        X_train, X_val, X_test = (
+            X[:train_len],
+            X[train_len : train_len + val_len],
+            X[train_len + val_len :],
+        )
+        y_train, y_val, y_test = (
+            y[:train_len],
+            y[train_len : train_len + val_len],
+            y[train_len + val_len :],
+        )
+        train_ds = CustomDataset(X_train, y_train)
+        val_ds = CustomDataset(X_val, y_val)
+        test_ds = CustomDataset(X_test, y_test)
+        train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=self.batch_size)
+        self.test_loader = DataLoader(test_ds, batch_size=self.batch_size)
+        self.dates_test = dates[train_len + val_len :]
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         criterion = torch.nn.MSELoss()
-
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max_epochs
+        )
+        best_val_loss = float("inf")
+        patience_counter = 0
         epoch_bar = tqdm(range(max_epochs), desc="Training")
         for epoch in epoch_bar:
             self.model.train()
-            total_loss = 0
-            for batch_X, batch_y in dataloader:
+            train_loss = 0
+            for batch_X, batch_y in train_loader:
+                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
                 optimizer.zero_grad()
                 output = self.model(batch_X)
                 loss = criterion(output, batch_y)
                 loss.backward()
                 optimizer.step()
-                total_loss += loss.item()
-            avg_loss = total_loss / len(dataloader)
-            epoch_bar.set_postfix({"epoch": epoch + 1, "loss": avg_loss})
-
-
+                train_loss += loss.item()
+            train_loss /= len(train_loader)
+            self.model.eval()
+            val_loss = 0
+            with torch.no_grad():
+                for batch_X, batch_y in val_loader:
+                    batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+                    output = self.model(batch_X)
+                    loss = criterion(output, batch_y)
+                    val_loss += loss.item()
+            val_loss /= len(val_loader)
+            scheduler.step()
+            epoch_bar.set_postfix({"Train Loss": train_loss, "Val Loss": val_loss})
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                torch.save(self.model.state_dict(), self.Model_Path)
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    epoch_bar.set_postfix(
+                        {
+                            "Train Loss": train_loss,
+                            "Val Loss": val_loss,
+                            "Early Stopping": "Triggered",
+                        }
+                    )
+                    break
+            self.model.load_state_dict(
+                torch.load(self.Model_Path, weights_only=True)
+            )
     def predict(self):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.eval()
 
-        df = self.full_df.copy()
-        features = ["close", "avg_sentiment_score", "sentiment_balance"]
-        recent_data = df[features].iloc[-self.encoder_len :].values
-        X_input = torch.tensor(recent_data, dtype=torch.float32).unsqueeze(0).to(device)
-
+        preds, trues = [], []
         with torch.no_grad():
-            pred = self.model(X_input).cpu().numpy().flatten()
-        return pred * self.close_std + self.close_mean
+            for batch_X, batch_y in self.test_loader:
+                batch_X = batch_X.to(device)
+                pred = self.model(batch_X).cpu().numpy()
+                true = batch_y.numpy()
+                preds.append(pred)
+                trues.append(true)
 
-    def plot_prediction(self, index=0):
-        predictions = self.predict()
-        true_target = (
-            self.full_df["close"].iloc[-self.prediction_len :].values * self.close_std
-            + self.close_mean
+        predictions = np.concatenate(preds, axis=0).flatten()
+        targets = np.concatenate(trues, axis=0).flatten()
+        return (
+            predictions * self.close_std + self.close_mean,
+            targets * self.close_std + self.close_mean,
         )
-        encoder_target = (
-            self.full_df["close"].iloc[-self.encoder_len : -self.prediction_len].values
-            * self.close_std
-            + self.close_mean
-        )
-        encoder_dates = (
-            self.full_df["date"].iloc[-self.encoder_len : -self.prediction_len].tolist()
-        )
-        prediction_dates = self.full_df["date"].iloc[-self.prediction_len :].tolist()
-        full_dates = encoder_dates + prediction_dates
 
+    def plot_prediction(self):
+        predictions, targets = self.predict()
+
+        dates = pd.to_datetime(self.dates_test)
         fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(dates, targets, label="True Future Price", color="green")
         ax.plot(
-            full_dates[: len(encoder_target)], encoder_target, label="Historical Price"
-        )
-        ax.plot(
-            full_dates[len(encoder_target) :],
-            true_target,
-            label="True Future Price",
-            color="green",
-        )
-        ax.plot(
-            full_dates[len(encoder_target) :],
+            dates,
             predictions,
             label="Predicted Price",
             color="red",
             linestyle="--",
         )
 
-        ax.set_title(f"{self.company} Stock Forecast")
+        ax.set_title(f"{self.company} Stock Forecast (Test Set)")
         ax.set_xlabel("Date")
         ax.set_ylabel("Price")
         ax.legend()
         ax.grid(True)
-        fig.autofmt_xdate()
+        plt.tight_layout()
 
         buf = BytesIO()
-        plt.tight_layout()
         plt.savefig(buf, format="png")
         plt.close(fig)
         buf.seek(0)
+        mae = mean_absolute_error(targets, predictions)
+        r2 = r2_score(targets, predictions)
+        print(f"MAE: {mae}, R² Score: {r2}")
         return buf
 
 
 if __name__ == "__main__":
     forecaster = StockPriceForecaster("AAPL")
     forecaster.build_model()
-    forecaster.train_model(max_epochs=100)
+    forecaster.train_model(max_epochs=2000)
 
     img_buf = forecaster.plot_prediction()
 
