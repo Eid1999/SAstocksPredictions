@@ -5,9 +5,91 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 import numpy as np
 from Dataset import Dataset_Class
+import torch.nn as nn
+import torch.nn.functional as F
+from tqdm import tqdm
+
+
+class SelfAttention(nn.Module):
+    """
+    A Multi-Head Self-Attention module based on the Transformer architecture.
+    """
+
+    def __init__(self, embed_dim, num_heads):
+        super(SelfAttention, self).__init__()
+        self.num_heads = num_heads
+        self.embed_dim = embed_dim
+        self.head_dim = embed_dim // num_heads
+
+        # Ensure embed_dim is divisible by num_heads for even distribution
+        assert (
+            self.head_dim * num_heads == embed_dim
+        ), "embed_dim must be divisible by num_heads"
+
+        # Linear layers for Q, K, V projections
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+
+        # Output linear layer after attention calculation
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+    def forward(self, x):
+        # x shape: (batch_size, seq_len, embed_dim)
+        batch_size, seq_len, _ = x.size()
+
+        # Project and reshape Q, K, V for multi-head attention
+        # (batch_size, seq_len, embed_dim) -> (batch_size, num_heads, seq_len, head_dim)
+        q = (
+            self.q_proj(x)
+            .view(batch_size, seq_len, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+        k = (
+            self.k_proj(x)
+            .view(batch_size, seq_len, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+        v = (
+            self.v_proj(x)
+            .view(batch_size, seq_len, self.num_heads, self.head_dim)
+            .transpose(1, 2)
+        )
+
+        # Scaled Dot-Product Attention: (Q @ K^T) / sqrt(d_k)
+        # scores shape: (batch_size, num_heads, seq_len, seq_len)
+        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim**0.5)
+
+        # Apply softmax to get attention weights
+        attn_weights = F.softmax(scores, dim=-1)
+
+        # Multiply attention weights with V
+        # attn_output shape: (batch_size, num_heads, seq_len, head_dim)
+        attn_output = torch.matmul(attn_weights, v)
+
+        # Concatenate heads and project back to original embedding dimension
+        # (batch_size, num_heads, seq_len, head_dim) -> (batch_size, seq_len, embed_dim)
+        attn_output = (
+            attn_output.transpose(1, 2)
+            .contiguous()
+            .view(batch_size, seq_len, self.embed_dim)
+        )
+
+        # Final linear projection
+        output = self.out_proj(attn_output)
+        return output
+
 
 class LSTMModel(torch.nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_layers=3, dropout=0.2):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        num_layers=2,
+        dropout=0.1,
+        num_heads=8,
+    ):
         super(LSTMModel, self).__init__()
         self.lstm = torch.nn.LSTM(
             input_size,
@@ -17,16 +99,44 @@ class LSTMModel(torch.nn.Module):
             dropout=dropout,
             bidirectional=True,
         )
+
+        # Add the SelfAttention layer
+        # The input dimension to self-attention is hidden_size * 2 because of bidirectional LSTM
+        self.self_attention = SelfAttention(
+            embed_dim=hidden_size * 2, num_heads=num_heads
+        )
+
+        # The original attention layer, now applied *after* self-attention
+        # This layer is used to produce a single context vector from the sequence representation
+        # enhanced by self-attention.
         self.attention = torch.nn.Linear(hidden_size * 2, 1)
+
         self.fc1 = torch.nn.Linear(hidden_size * 2, hidden_size)
         self.relu = torch.nn.ReLU()
         self.dropout = torch.nn.Dropout(dropout)
         self.fc2 = torch.nn.Linear(hidden_size, output_size)
 
     def forward(self, x):
+        # x shape: (batch_size, seq_len, input_size)
+
+        # Pass input through LSTM
+        # lstm_out shape: (batch_size, seq_len, hidden_size * 2) due to bidirectional
         lstm_out, _ = self.lstm(x)
-        attn_weights = torch.softmax(self.attention(lstm_out), dim=1)
-        context = torch.sum(attn_weights * lstm_out, dim=1)
+
+        # Apply self-attention to the LSTM output
+        # self_attn_out shape: (batch_size, seq_len, hidden_size * 2)
+        self_attn_out = self.self_attention(lstm_out)
+
+        # Apply the original attention mechanism on the self-attention output
+        # This learns a weighted sum of the self-attention enhanced features
+        # attn_weights shape: (batch_size, seq_len, 1)
+        attn_weights = torch.softmax(self.attention(self_attn_out), dim=1)
+
+        # Compute the context vector as a weighted sum of the self-attention outputs
+        # context shape: (batch_size, hidden_size * 2)
+        context = torch.sum(attn_weights * self_attn_out, dim=1)
+
+        # Pass the context vector through the feed-forward layers
         out = self.fc1(context)
         out = self.relu(out)
         out = self.dropout(out)
@@ -52,8 +162,8 @@ class StockPriceForecaster:
         company: str,
         start_date=None,
         end_date=None,
-        max_encoder_length=30,
-        max_prediction_length=7,
+        max_encoder_length=365,
+        max_prediction_length=60,
         batch_size=32,
     ):
         self.company = company
@@ -144,13 +254,16 @@ class StockPriceForecaster:
 
         for epoch in range(max_epochs):
             self.model.train()
-            for batch_X, batch_y in dataloader:
+            total_loss = 0
+            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{max_epochs}")
+            for batch_X, batch_y in pbar:
                 optimizer.zero_grad()
                 output = self.model(batch_X)
                 loss = criterion(output, batch_y)
                 loss.backward()
                 optimizer.step()
-            print(f"Epoch {epoch+1}/{max_epochs}, Loss: {loss.item():.4f}")
+                total_loss += loss.item()
+                pbar.set_postfix({"loss": total_loss / (pbar.n + 1e-8)})
 
     def predict(self):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -218,7 +331,7 @@ class StockPriceForecaster:
 if __name__ == "__main__":
     forecaster = StockPriceForecaster("AAPL")
     forecaster.build_model()
-    forecaster.train_model(max_epochs=70)
+    forecaster.train_model(max_epochs=100)
 
     img_buf = forecaster.plot_prediction()
 
