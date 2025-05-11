@@ -252,18 +252,20 @@ class StockPriceForecaster:
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         criterion = torch.nn.MSELoss()
 
-        for epoch in range(max_epochs):
+        epoch_bar = tqdm(range(max_epochs), desc="Training")
+        for epoch in epoch_bar:
             self.model.train()
             total_loss = 0
-            pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{max_epochs}")
-            for batch_X, batch_y in pbar:
+            for batch_X, batch_y in dataloader:
                 optimizer.zero_grad()
                 output = self.model(batch_X)
                 loss = criterion(output, batch_y)
                 loss.backward()
                 optimizer.step()
                 total_loss += loss.item()
-                pbar.set_postfix({"loss": total_loss / (pbar.n + 1e-8)})
+            avg_loss = total_loss / len(dataloader)
+            epoch_bar.set_postfix({"epoch": epoch + 1, "loss": avg_loss})
+
 
     def predict(self):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
