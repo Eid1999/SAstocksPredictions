@@ -101,6 +101,7 @@ class CustomDataset(Dataset):
 
 
 class StockPriceForecaster:
+
     def __init__(
         self,
         company: str,
@@ -179,7 +180,7 @@ class StockPriceForecaster:
 
     def build_model(self):
         input_size = 3
-        hidden_size = 200
+        hidden_size = 100
         self.model = LSTMModel(input_size, hidden_size, self.prediction_len)
         self.model.to(self.device)
 
@@ -272,7 +273,7 @@ class StockPriceForecaster:
             torch.load(self.Model_Path, map_location=self.device)
         )
     def predict(self):
-        
+
         self.model.eval()
 
         preds, trues = [], []
@@ -290,7 +291,41 @@ class StockPriceForecaster:
             predictions * self.close_std + self.close_mean,
             targets * self.close_std + self.close_mean,
         )
+    def load_model(self):
+        self.model.load_state_dict(
+            torch.load(self.Model_Path, map_location=self.device)
+        )
+        self.model.eval()
+    def predict_for_given_day(self, target_date):
 
+        # Convert target_date to datetime if it's a string
+        target_date = pd.to_datetime(target_date, utc=True)
+
+        # Filter the full dataset up to the target date
+        df_up_to_target = self.full_df[self.full_df["date"] <= target_date].copy()
+
+        # Check if there are enough historical data points to form a sequence
+        if len(df_up_to_target) < self.encoder_len:
+            raise ValueError(f"Not enough historical data available before {target_date}.")
+
+        # Get the last sequence of data before the target date
+        features = ["close", "avg_sentiment_score", "sentiment_balance"]
+        last_sequence = df_up_to_target[features].iloc[-self.encoder_len:].values
+
+        # Convert to tensor and add batch dimension
+        input_tensor = torch.tensor(np.array([last_sequence]), dtype=torch.float32).to(self.device)
+
+        # Make prediction
+        self.model.eval()
+        with torch.no_grad():
+            output = self.model(input_tensor)
+            prediction = output.cpu().numpy().flatten()[0]  # Take the first prediction
+
+        # De-normalize the prediction
+        predicted_price = prediction * self.close_std + self.close_mean
+        last_sequence= last_sequence * self.close_std + self.close_mean
+
+        return predicted_price, last_sequence
     def plot_prediction(self):
         predictions, targets = self.predict()
 
@@ -327,7 +362,10 @@ if __name__ == "__main__":
     forecaster.build_model()
     forecaster.train_model(max_epochs=500)
 
-    img_buf = forecaster.plot_prediction()
-
-    with open("aapl_forecast.png", "wb") as f:
-        f.write(img_buf.getvalue())
+    forecaster.plot_prediction()
+    # forecaster = StockPriceForecaster("GOOGL")
+    # forecaster.build_model()
+    # forecaster.load_model() 
+    # predicted_price, last_sequence = forecaster.predict_for_given_day("2023-10-01")
+    # print(f"Predicted Price for 2023-10-01: {predicted_price}")
+    # print(f"Last Sequence for 2023-10-01: {last_sequence}")

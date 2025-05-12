@@ -188,6 +188,16 @@ class Dataset_Class:
                 "products": ["aws", "prime", "alexa", "echo", "kindle"],
                 "people": ["jeff bezos", "andy jassy"],
             }
+        elif self.stock_symbol == "GOOGL":
+                dict_keywords = {
+                    "company": ["Google", "GOOGL", "Alphabet Inc", "Alphabet"],
+                    "products": [
+                        "Search", "YouTube", "Android", "Chrome", "Gmail", 
+                        "Google Maps", "Google Drive", "Google Cloud", "Pixel", 
+                        "Google Play", "Google Assistant"
+                    ],
+                    "people": ["Sundar Pichai", "Larry Page", "Sergey Brin"]
+                }
         else:
             dict_keywords = {
                 "company": ["Tesla", "tsla", "tesla inc"],
@@ -434,7 +444,7 @@ class Dataset_Class:
         plt.show()
 # Test the implementation
 if __name__ == "__main__":
-    dt = Dataset_Class("AAPL", load_dataset=True)
+    dt = Dataset_Class("GOOGL", load_dataset=True)
     if True:
         dt.sccater_plot("2018-01-01", "2018-02-01")
         dt.pie_graph()
