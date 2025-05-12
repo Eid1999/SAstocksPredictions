@@ -26,7 +26,6 @@ cymem==2.0.11
 en_core_web_md @ https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl#sha256=5e6329fe3fecedb1d1a02c3ea2172ee0fede6cea6e4aefb6a02d832dba78a310
 fastrlock==0.8.3
 filelock==3.18.0
-finvizfinance @ git+https://github.com/lit26/finvizfinance.git@c8c3f70e863e8e98ec605c4110c22ee5c7a23910
 Flask==3.1.0
 flask-cors==5.0.1
 flatbuffers==25.2.10
@@ -80,20 +79,6 @@ narwhals==1.39.0
 networkx==3.4.2
 nltk==3.9.1
 numpy==1.26.4
-nvidia-cublas-cu12==12.6.4.1
-nvidia-cuda-cupti-cu12==12.6.80
-nvidia-cuda-nvrtc-cu12==12.6.77
-nvidia-cuda-runtime-cu12==12.6.77
-nvidia-cudnn-cu12==9.5.1.17
-nvidia-cufft-cu12==11.3.0.4
-nvidia-cufile-cu12==1.11.1.6
-nvidia-curand-cu12==10.3.7.77
-nvidia-cusolver-cu12==11.7.1.2
-nvidia-cusparse-cu12==12.5.4.2
-nvidia-cusparselt-cu12==0.6.3
-nvidia-nccl-cu12==2.26.2
-nvidia-nvjitlink-cu12==12.6.85
-nvidia-nvtx-cu12==12.6.77
 ollama==0.4.8
 opt_einsum==3.4.0
 optree==0.15.0
@@ -155,7 +140,6 @@ torch==2.7.0
 torchmetrics==1.7.1
 tqdm==4.67.1
 transformers==4.49.0
-triton==3.3.0
 typer==0.15.3
 typing-inspection==0.4.0
 typing_extensions==4.13.2
