@@ -10,76 +10,18 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import pdb
 from sklearn.metrics import mean_absolute_error, r2_score
+import random
+import os
 
 
-class SelfAttention(nn.Module):
-    """
-    A Multi-Head Self-Attention module based on the Transformer architecture.
-    """
-
-    def __init__(self, embed_dim, num_heads):
-        super(SelfAttention, self).__init__()
-        self.num_heads = num_heads
-        self.embed_dim = embed_dim
-        self.head_dim = embed_dim // num_heads
-
-        # Ensure embed_dim is divisible by num_heads for even distribution
-        assert (
-            self.head_dim * num_heads == embed_dim
-        ), "embed_dim must be divisible by num_heads"
-
-        # Linear layers for Q, K, V projections
-        self.q_proj = nn.Linear(embed_dim, embed_dim)
-        self.k_proj = nn.Linear(embed_dim, embed_dim)
-        self.v_proj = nn.Linear(embed_dim, embed_dim)
-
-        # Output linear layer after attention calculation
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
-
-    def forward(self, x):
-        # x shape: (batch_size, seq_len, embed_dim)
-        batch_size, seq_len, _ = x.size()
-
-        # Project and reshape Q, K, V for multi-head attention
-        # (batch_size, seq_len, embed_dim) -> (batch_size, num_heads, seq_len, head_dim)
-        q = (
-            self.q_proj(x)
-            .view(batch_size, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-        k = (
-            self.k_proj(x)
-            .view(batch_size, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-        v = (
-            self.v_proj(x)
-            .view(batch_size, seq_len, self.num_heads, self.head_dim)
-            .transpose(1, 2)
-        )
-
-        # Scaled Dot-Product Attention: (Q @ K^T) / sqrt(d_k)
-        # scores shape: (batch_size, num_heads, seq_len, seq_len)
-        scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim**0.5)
-
-        # Apply softmax to get attention weights
-        attn_weights = F.softmax(scores, dim=-1)
-
-        # Multiply attention weights with V
-        # attn_output shape: (batch_size, num_heads, seq_len, head_dim)
-        attn_output = torch.matmul(attn_weights, v)
-
-        # Concatenate heads and project back to original embedding dimension
-        # (batch_size, num_heads, seq_len, head_dim) -> (batch_size, seq_len, embed_dim)
-        attn_output = (
-            attn_output.transpose(1, 2)
-            .contiguous()
-            .view(batch_size, seq_len, self.embed_dim)
-        )
-
-        # Final linear projection
-        output = self.out_proj(attn_output)
-        return output
+def set_seed(seed=42):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # For multi-GPU
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 class ResidualLSTM(nn.Module):
@@ -154,8 +96,9 @@ class StockPriceForecaster:
         max_prediction_length=1,
         batch_size=68,
     ):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.Model_Path=f"best_model_{company}.pt"
-        torch.manual_seed(42)
+        set_seed(42)
         self.company = company
         self.encoder_len = max_encoder_length
         self.prediction_len = max_prediction_length
@@ -224,10 +167,10 @@ class StockPriceForecaster:
         input_size = 3
         hidden_size = 500
         self.model = LSTMModel(input_size, hidden_size, self.prediction_len)
-        self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+        self.model.to(self.device)
 
     def train_model(self, max_epochs=200, patience=30):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = self.device
         df = self.full_df.copy()
         features = ["close", "avg_sentiment_score", "sentiment_balance"]
         X, y, dates = [], [], []
@@ -277,7 +220,7 @@ class StockPriceForecaster:
             self.model.train()
             train_loss = 0
             for batch_X, batch_y in train_loader:
-                batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+                batch_X, batch_y = batch_X.to(self.device), batch_y.to(self.device)
                 optimizer.zero_grad()
                 output = self.model(batch_X)
                 loss = criterion(output, batch_y)
@@ -311,17 +254,17 @@ class StockPriceForecaster:
                         }
                     )
                     break
-            self.model.load_state_dict(
-                torch.load(self.Model_Path, weights_only=True)
-            )
+        self.model.load_state_dict(
+            torch.load(self.Model_Path, map_location=self.device)
+        )
     def predict(self):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
         self.model.eval()
 
         preds, trues = [], []
         with torch.no_grad():
             for batch_X, batch_y in self.test_loader:
-                batch_X = batch_X.to(device)
+                batch_X = batch_X.to(self.device)
                 pred = self.model(batch_X).cpu().numpy()
                 true = batch_y.numpy()
                 preds.append(pred)
@@ -368,7 +311,7 @@ class StockPriceForecaster:
 if __name__ == "__main__":
     forecaster = StockPriceForecaster("AAPL")
     forecaster.build_model()
-    forecaster.train_model(max_epochs=2000)
+    forecaster.train_model(max_epochs=500)
 
     img_buf = forecaster.plot_prediction()
 

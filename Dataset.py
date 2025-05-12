@@ -409,43 +409,29 @@ class Dataset_Class:
         plt.savefig(f"./graphs/{self.stock_symbol.lower()}_sentiment_vs_stock_price_categories.png")
         plt.show()
 
-    def plot_sentiment_vs_stock_movement(self) -> None:
-        """
-        Plot the correlation between sentiment categories (positive, neutral, negative)
-        and stock price movement (rise or fall).
-        """
-        if "sentiment" not in self.data.columns or "Close" not in self.data.columns:
-            print("Required columns ('sentiment' and 'Close') are missing in the dataset.")
-            return
+    def plot_sa_distribution_by_movement(self, score_type="positive_score"):
+        filtered = self.data[self.data["company_focused_summary"] != "No Information"].copy()
+        filtered["movement"] = filtered["Close"].diff().apply(lambda x: "rise" if x > 0 else ("fall" if x < 0 else "flat"))
+        filtered = filtered[filtered["movement"] != "flat"]
 
-        # Exclude rows with "No Information"
-        filtered_data = self.data[self.data["company_focused_summary"] != "No Information"]
-
-        # Add a column for stock movement (rise or fall)
-        filtered_data["movement"] = filtered_data["Close"].diff().apply(
-            lambda x: "rise" if x > 0 else "fall"
-        )
-
-        # Group data by sentiment and movement
-        movement_counts = filtered_data.groupby(["sentiment", "movement"]).size().unstack()
-
-        # Plot the data
-        movement_counts.plot(
-            kind="bar",
-            stacked=True,
-            color={"rise": "green", "fall": "red"},
-            figsize=(10, 6),
-        )
-        plt.title(f"Sentiment vs Stock Movement for {self.stock_symbol}", fontsize=16)
-        plt.xlabel("Sentiment", fontsize=12)
-        plt.ylabel("Count", fontsize=12)
-        plt.legend(title="Stock Movement", loc="upper right")
-        plt.grid(axis="y", linestyle="--", alpha=0.7)
+        plt.figure(figsize=(8, 6))
+        sns.violinplot(x="movement", y=score_type, data=filtered, palette="muted", order=["fall", "rise"])
+        plt.title(f"{score_type} Distribution by Stock Movement")
+        plt.xlabel("Stock Movement")
+        plt.ylabel("Sentiment Score")
+        plt.grid(True)
         plt.tight_layout()
-        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_sentiment_vs_stock_movement.png")
+        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_{score_type}_violin.png")
         plt.show()
-
-
+    def plot_correlation_matrix(self):
+        cols = ["positive_score", "neutral_score", "negative_score", "Close"]
+        corr = self.data[cols].corr()
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(corr, annot=True, cmap="coolwarm")
+        plt.title("Correlation Matrix: Sentiment vs Stock Price")
+        plt.tight_layout()
+        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_correlation_matrix.png")
+        plt.show()
 # Test the implementation
 if __name__ == "__main__":
     dt = Dataset_Class("AAPL", load_dataset=True)
@@ -454,4 +440,5 @@ if __name__ == "__main__":
         dt.pie_graph()
         dt.plot_sentiment_distribution("pie")
         dt.plot_sentiment_vs_stock_price()
-        dt.plot_sentiment_vs_stock_movement()
+        dt.plot_sa_distribution_by_movement()
+        dt.plot_correlation_matrix()
