@@ -24,6 +24,17 @@ def set_seed(seed=42):
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
+class Attention(nn.Module):
+    def __init__(self, feature_dim):
+        super(Attention, self).__init__()
+        self.attention = nn.Linear(feature_dim, 1)
+
+    def forward(self, x):
+        weights = F.softmax(self.attention(x), dim=1)
+        weighted = torch.sum(weights * x, dim=1)
+        return weighted
+
+
 class ResidualLSTM(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout):
         super(ResidualLSTM, self).__init__()
@@ -59,6 +70,8 @@ class LSTMModel(torch.nn.Module):
             num_layers=num_layers,
             dropout=dropout,
         )
+        self.attention = Attention(hidden_size * 2)
+
         self.fc1 = torch.nn.Linear(hidden_size * 2, hidden_size)
         self.relu = torch.nn.ReLU()
         self.dropout = torch.nn.Dropout(dropout)
@@ -66,8 +79,9 @@ class LSTMModel(torch.nn.Module):
 
     def forward(self, x):
         lstm_out = self.lstm(x)
-        pooled_out = torch.max(lstm_out, dim=1)[0]
-        out = self.fc1(pooled_out)
+        context = self.attention(lstm_out)
+
+        out = self.fc1(context)
         out = self.relu(out)
         out = self.dropout(out)
         output = self.fc2(out)
@@ -97,7 +111,7 @@ class StockPriceForecaster:
         batch_size=68,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.Model_Path=f"best_model_{company}.pt"
+        self.Model_Path=f"models/best_model_{company}.pt"
         set_seed(42)
         self.company = company
         self.encoder_len = max_encoder_length
@@ -165,7 +179,7 @@ class StockPriceForecaster:
 
     def build_model(self):
         input_size = 3
-        hidden_size = 500
+        hidden_size = 200
         self.model = LSTMModel(input_size, hidden_size, self.prediction_len)
         self.model.to(self.device)
 
@@ -299,7 +313,7 @@ class StockPriceForecaster:
         plt.tight_layout()
 
         buf = BytesIO()
-        plt.savefig(buf, format="png")
+        plt.savefig(f"./graphs/{self.company}_forecast.png")
         plt.close(fig)
         buf.seek(0)
         mae = mean_absolute_error(targets, predictions)
@@ -309,7 +323,7 @@ class StockPriceForecaster:
 
 
 if __name__ == "__main__":
-    forecaster = StockPriceForecaster("AAPL")
+    forecaster = StockPriceForecaster("AMZN")
     forecaster.build_model()
     forecaster.train_model(max_epochs=500)
 

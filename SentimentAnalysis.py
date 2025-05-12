@@ -105,7 +105,7 @@ class FinBertTargetSentimentAnalyzer:
 
 
 if __name__ == "__main__":
-    dt = Dataset_Class("AAPL", load_dataset=False)
+    dt = Dataset_Class("AMZN", load_dataset=False)
     analyzer = FinBertTargetSentimentAnalyzer(dt)
     result_df = analyzer.analyze_target_sentiment()
     analyzer.save_sentiment_file(result_df)

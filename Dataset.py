@@ -421,7 +421,7 @@ class Dataset_Class:
         plt.ylabel("Sentiment Score")
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_{score_type}_violin.png")
+        plt.savefig(f"./graphs/{self.stock_symbol.lower()}_{score_type}_sa_distribution.png")
         plt.show()
     def plot_correlation_matrix(self):
         cols = ["positive_score", "neutral_score", "negative_score", "Close"]
