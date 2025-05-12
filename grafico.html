@@ -102,14 +102,17 @@
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
       display: flex;
       flex-direction: column;
+      min-width: 600px; /* Ensure enough width for the graph */
+      min-height: 400px; /* Ensure enough height for the graph */
+      width: 100%; /* Allow the container to expand to fill available space */
+      height: 100%; /* Allow the container to expand vertically if needed */
     }
-    .chart-header {
-      font-size: 1.25em;
-      font-weight: 600;
-      color: #333;
-      margin-bottom: 15px;
-      border-bottom: 1px solid #e0e0e0;
-      padding-bottom: 10px;
+    .container {
+      display: flex;
+      align-items: flex-start;
+      gap: 20px;
+      padding: 20px;
+      min-width: 800px; /* Ensure a minimum width for the container */
     }
     .info-grid {
       display: grid;
@@ -187,21 +190,23 @@
     </div>
   </div>
 
+  <script src="https://cdn.plot.ly/plotly-latest.min.js "></script>
   <script>
     const dropdown = document.getElementById('stockDropdown');
     const selected = dropdown.querySelector('.dropdown-selected');
     const list = dropdown.querySelector('.dropdown-list');
     const hiddenInput = document.getElementById('stock');
     const items = dropdown.querySelectorAll('.dropdown-item');
-
+  
     const dateInput = document.getElementById('dateObjective');
     const dateError = document.getElementById('dateError');
     const dateLabel = document.getElementById('dateLabel');
     const companyName = document.getElementById('companyName');
     const predictedPrice = document.getElementById('predictedPrice');
-    const chartImg = document.getElementById('chart');
+    const chartContainer = document.getElementById('chart'); // Div to hold Plotly chart
     const loadingIndicator = document.getElementById('loadingIndicator');
-
+  
+    // Dropdown logic
     selected.addEventListener('click', () => list.classList.toggle('hidden'));
     items.forEach(item => item.addEventListener('click', () => {
       hiddenInput.value = item.dataset.value;
@@ -214,16 +219,16 @@
     document.addEventListener('click', e => {
       if (!dropdown.contains(e.target)) list.classList.add('hidden');
     });
-
+  
     function updateDate() {
       const date = dateInput.value;
       if (!date) return;
-
+  
       if (date < dateInput.min || date > dateInput.max) {
         dateInput.classList.remove('valid');
         dateError.style.display = 'block';
-        chartImg.alt = 'Data inválida.';
         predictedPrice.textContent = '—';
+        chartContainer.innerHTML = '';
       } else {
         dateInput.classList.add('valid');
         dateError.style.display = 'none';
@@ -231,41 +236,43 @@
         updateChart();
       }
     }
-
+  
     function updateChart() {
       const stock = hiddenInput.value;
       const date = dateInput.value;
       if (!date) return;
-
+  
       loadingIndicator.style.display = 'block';
-      chartImg.style.opacity = '0.3';
-
+      chartContainer.innerHTML = '';
+      predictedPrice.textContent = '...';
+  
       fetch(`/chart?stock=${stock}&date=${date}`)
-        .then(response => response.json())
-        .then(data => {
-          loadingIndicator.style.display = 'none';
-          chartImg.style.opacity = '1';
+      .then(response => response.json())
+      .then(data => {
+        loadingIndicator.style.display = 'none';
 
-          if (data && data.image) {
-            chartImg.src = data.image;
-            chartImg.alt = `Gráfico de ${stock} em ${date}`;
-            predictedPrice.textContent = data.predicted_price
-              ? `$${data.predicted_price.toFixed(2)}`
-              : '—';
-          } else if (data.error) {
-            chartImg.alt = 'Erro ao carregar gráfico.';
-            predictedPrice.textContent = 'Erro';
-          }
-        })
-        .catch(err => {
-          console.error('Erro ao buscar dados do gráfico:', err);
-          loadingIndicator.style.display = 'none';
-          chartImg.style.opacity = '1';
-          chartImg.alt = 'Erro ao carregar gráfico.';
+        if (data && data.graph) {
+          const graphJSON = JSON.parse(data.graph);
+          // Add explicit width and height to the layout
+          graphJSON.layout.width = 1350; // Adjust as needed
+          graphJSON.layout.height = 800; // Adjust as needed
+          graphJSON.layout.margin = { l: 50, r: 50, t: 50, b: 50 }; // Left, Right, Top, Bottom margins
+          Plotly.newPlot(chartContainer, graphJSON.data, graphJSON.layout);
+          companyName.textContent = data.company;
+          predictedPrice.textContent = `$${data.predicted_price.toFixed(2)}`;
+        } else if (data.error) {
+          chartContainer.innerHTML = `<p style="color:red;">${data.error}</p>`;
           predictedPrice.textContent = 'Erro';
-        });
+        }
+      })
+      .catch(err => {
+        console.error('Erro ao carregar gráfico:', err);
+        loadingIndicator.style.display = 'none';
+        chartContainer.innerHTML = `<p style="color:red;">Falha ao carregar o gráfico.</p>`;
+        predictedPrice.textContent = 'Erro';
+      });
     }
-
+  
     dateInput.addEventListener('change', updateDate);
     dateLabel.textContent = dateInput.value || '—';
   </script>
